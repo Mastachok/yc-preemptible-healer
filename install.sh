@@ -41,9 +41,9 @@ box_line() {
   local text="$1"
   local cols; cols="$(term_cols)"
   local inner=$((cols-4))
-  printf "%s%s%s " "${GRAY}${VL}${RESET}" "" ""
+  printf "%s " "${GRAY}${VL}${RESET}"
   printf "%-${inner}s" "$text" | cut -c1-"$inner"
-  printf " %s%s\n" "${GRAY}${VL}${RESET}" ""
+  printf " %s\n" "${GRAY}${VL}${RESET}"
 }
 box_bot() {
   local cols; cols="$(term_cols)"
@@ -56,28 +56,28 @@ box_bot() {
 LANG_CHOICE=""
 
 # support CLI flags: --lang ru|en or --lang=ru|en
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --lang=ru|--lang=en) LANG_CHOICE="${1#*=}"; shift ;;
-    --lang) LANG_CHOICE="${2:-}"; shift 2 ;;
-    *) shift ;;
+args=("$@")
+i=0
+while [[ $i -lt ${#args[@]} ]]; do
+  a="${args[$i]}"
+  case "$a" in
+    --lang=ru|--lang=en) LANG_CHOICE="${a#*=}" ;;
+    --lang)
+      ((i++)) || true
+      LANG_CHOICE="${args[$i]:-}"
+      ;;
   esac
+  ((i++)) || true
 done
 
 detect_lang_auto() {
   local l="${LANG:-}"
-  if [[ "$l" == ru* || "$l" == *RU* ]]; then
-    echo "ru"
-  else
-    echo "en"
-  fi
+  if [[ "$l" == ru* || "$l" == *RU* ]]; then echo "ru"; else echo "en"; fi
 }
 
 choose_lang_pretty() {
-  # If --lang provided, use it
   if [[ "$LANG_CHOICE" == "ru" || "$LANG_CHOICE" == "en" ]]; then
-    echo "$LANG_CHOICE"
-    return
+    echo "$LANG_CHOICE"; return
   fi
 
   local auto; auto="$(detect_lang_auto)"
@@ -91,7 +91,6 @@ choose_lang_pretty() {
   box_line "${GRAY}Press 1 or 2 (auto in 5s: ${auto})${RESET}"
   box_bot
 
-  # Read with timeout; if no input -> auto
   local ans=""
   if read -r -t 5 -p "> " ans; then
     case "${ans// /}" in
@@ -141,11 +140,11 @@ t() {
     ru:mode2) echo "2) По имени (names)" ;;
     en:mode2) echo "2) By name (names)" ;;
 
-    ru:ids) echo "INSTANCE_IDS (через запятую)" ;;
-    en:ids) echo "INSTANCE_IDS (comma-separated)" ;;
+    ru:ids) echo "INSTANCE_IDS (через запятую, без пробелов)" ;;
+    en:ids) echo "INSTANCE_IDS (comma-separated, no spaces)" ;;
 
-    ru:names) echo "INSTANCE_NAMES (через запятую)" ;;
-    en:names) echo "INSTANCE_NAMES (comma-separated)" ;;
+    ru:names) echo "INSTANCE_NAMES (через запятую, без пробелов)" ;;
+    en:names) echo "INSTANCE_NAMES (comma-separated, no spaces)" ;;
 
     ru:oauth) echo "[5/6] OAuth авторизация (по ссылке)" ;;
     en:oauth) echo "[5/6] OAuth login (via link)" ;;
@@ -164,6 +163,9 @@ t() {
 
     ru:err_list) echo "Список не может быть пустым." ;;
     en:err_list) echo "List cannot be empty." ;;
+
+    ru:choose) echo "Выбор" ;;
+    en:choose) echo "Choice" ;;
 
     *) echo "$1" ;;
   esac
