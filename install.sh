@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+env -u SHELLOPTS bash install.sh
 set -euo pipefail
 
 APP="yc-preemptible-healer"
