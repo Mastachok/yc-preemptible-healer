@@ -10,7 +10,7 @@ YC_PROFILE="healer"
 
 need_root() {
   if [[ $EUID -ne 0 ]]; then
-    echo "Запусти от root: sudo bash install.sh"
+    echo "Запусти от root: bash install.sh"
     exit 1
   fi
 }
@@ -40,7 +40,7 @@ install_yc() {
     echo "yc уже установлен"
   else
     curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-    ln -sf /root/yandex-cloud/bin/yc /usr/local/bin/yc
+    ln -sf /root/yandex-cloud/bin/yc /usr/local/bin/yc || true
   fi
 }
 
@@ -53,30 +53,58 @@ setup_dirs() {
 
 write_files() {
   echo "[4/7] Копирование файлов"
-  cp ./heal.sh "$APP_DIR/heal.sh"
+  cp -f ./heal.sh "$APP_DIR/heal.sh"
   chmod +x "$APP_DIR/heal.sh"
 
-  cp ./systemd/yc-preemptible-healer.service /etc/systemd/system/
-  cp ./systemd/yc-preemptible-healer.timer /etc/systemd/system/
+  cp -f ./systemd/yc-preemptible-healer.service /etc/systemd/system/
+  cp -f ./systemd/yc-preemptible-healer.timer /etc/systemd/system/
 }
 
 configure_interactive() {
   echo "[5/7] Настройка"
 
-  echo "Выбери метод авторизации:"
-  echo "  1) OAuth через ссылку (быстро, удобно)"
-  echo "  2) Service Account key.json (рекомендуется для серверов)"
-  AUTH_METHOD="$(ask "Введи 1 или 2" "1")"
-
   FOLDER_ID="$(ask "FOLDER_ID (папка Yandex Cloud)" "")"
-  LABEL_KEY="$(ask "LABEL_KEY (метка для отбора VM)" "heal")"
-  LABEL_VALUE="$(ask "LABEL_VALUE (значение метки)" "true")"
-  INTERVAL="$(ask "Интервал проверки (сек)" "120")"
+  INTERVAL_SEC="$(ask "Интервал проверки (сек)" "60")"
 
-  SERVICE_ACCOUNT_KEY=""
-  if [[ "$AUTH_METHOD" == "2" ]]; then
-    SERVICE_ACCOUNT_KEY="$(ask "Путь к service-account key.json" "/root/sa-key.json")"
-  fi
+  echo "Как выбирать VM для автоподъёма?"
+  echo "  1) По метке (labels) — рекомендуемый способ"
+  echo "  2) По ID (ids) — строго заданные VM"
+  echo "  3) По именам (names) — строго заданные VM"
+  MODE_CHOICE="$(ask "Выбери 1/2/3" "1")"
+
+  VM_SELECT_MODE="labels"
+  LABEL_KEY="heal"
+  LABEL_VALUE="true"
+  INSTANCE_IDS=""
+  INSTANCE_NAMES=""
+
+  case "$MODE_CHOICE" in
+    1)
+      VM_SELECT_MODE="labels"
+      LABEL_KEY="$(ask "LABEL_KEY" "heal")"
+      LABEL_VALUE="$(ask "LABEL_VALUE" "true")"
+      ;;
+    2)
+      VM_SELECT_MODE="ids"
+      INSTANCE_IDS="$(ask "INSTANCE_IDS (через запятую, без пробелов)" "")"
+      if [[ -z "$INSTANCE_IDS" ]]; then
+        echo "INSTANCE_IDS не может быть пустым в режиме ids"
+        exit 1
+      fi
+      ;;
+    3)
+      VM_SELECT_MODE="names"
+      INSTANCE_NAMES="$(ask "INSTANCE_NAMES (через запятую, без пробелов)" "")"
+      if [[ -z "$INSTANCE_NAMES" ]]; then
+        echo "INSTANCE_NAMES не может быть пустым в режиме names"
+        exit 1
+      fi
+      ;;
+    *)
+      echo "Неверный выбор"
+      exit 1
+      ;;
+  esac
 
   if [[ -z "$FOLDER_ID" ]]; then
     echo "FOLDER_ID не может быть пустым."
@@ -84,40 +112,29 @@ configure_interactive() {
   fi
 
   cat > "$CFG_FILE" <<EOF
-AUTH_METHOD="$AUTH_METHOD"   # 1=OAuth, 2=ServiceAccount
 FOLDER_ID="$FOLDER_ID"
+YC_PROFILE="$YC_PROFILE"
+INTERVAL_SEC="$INTERVAL_SEC"
+LOG_FILE="$LOG_FILE"
+
+VM_SELECT_MODE="$VM_SELECT_MODE"    # labels | ids | names
 LABEL_KEY="$LABEL_KEY"
 LABEL_VALUE="$LABEL_VALUE"
-YC_PROFILE="$YC_PROFILE"
-SERVICE_ACCOUNT_KEY="$SERVICE_ACCOUNT_KEY"
-INTERVAL_SEC="$INTERVAL"
-LOG_FILE="$LOG_FILE"
+INSTANCE_IDS="$INSTANCE_IDS"        # comma-separated
+INSTANCE_NAMES="$INSTANCE_NAMES"    # comma-separated
 EOF
   chmod 600 "$CFG_FILE"
 }
 
-setup_yc_auth() {
-  echo "[6/7] Авторизация YC CLI"
-  # shellcheck disable=SC1090
-  source "$CFG_FILE"
-
+oauth_login() {
+  echo "[6/7] OAuth авторизация (по ссылке)"
   yc config profile create "$YC_PROFILE" >/dev/null 2>&1 || true
 
-  if [[ "$AUTH_METHOD" == "1" ]]; then
-    echo "OAuth авторизация: сейчас yc покажет ссылку — открой её в браузере и подтверди."
-    echo "После подтверждения вернись в терминал и продолжай."
-    yc init --profile "$YC_PROFILE"
-  else
-    if [[ -z "${SERVICE_ACCOUNT_KEY}" || ! -f "${SERVICE_ACCOUNT_KEY}" ]]; then
-      echo "Не найден key.json по пути: ${SERVICE_ACCOUNT_KEY}"
-      echo "Положи файл и перезапусти install.sh"
-      exit 1
-    fi
-    yc --profile "$YC_PROFILE" config set service-account-key "$SERVICE_ACCOUNT_KEY" >/dev/null
-    yc --profile "$YC_PROFILE" config set folder-id "$FOLDER_ID" >/dev/null
-  fi
+  echo "Сейчас yc покажет ссылку. Открой её в браузере, разреши доступ и вернись сюда."
+  yc init --profile "$YC_PROFILE"
 
-  # На всякий — выставим folder-id и в OAuth профиле тоже
+  # shellcheck disable=SC1090
+  source "$CFG_FILE"
   yc --profile "$YC_PROFILE" config set folder-id "$FOLDER_ID" >/dev/null || true
 }
 
@@ -131,9 +148,9 @@ enable_timer() {
 Description=YC Preemptible Healer Timer
 
 [Timer]
-OnBootSec=60
+OnBootSec=30
 OnUnitActiveSec=${INTERVAL_SEC}
-AccuracySec=15s
+AccuracySec=10s
 
 [Install]
 WantedBy=timers.target
@@ -151,8 +168,9 @@ main() {
   setup_dirs
   write_files
   configure_interactive
-  setup_yc_auth
+  oauth_login
   enable_timer
 }
 
 main
+
